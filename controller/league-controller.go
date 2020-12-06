@@ -3,21 +3,20 @@ package controller
 import (
 	"encoding/json"
 	"errors"
-	"log"
+	"fmt"
 	"net/http"
 	"reflect"
 
 	"github.com/jguerra6/API/errorsHandler"
+
 	"github.com/jguerra6/API/infrastructure/datastore"
 	"github.com/jguerra6/API/infrastructure/router"
 )
 
-type controller struct{}
-
-var (
-	httpRouter = router.NewMuxRouter()
-	db         = datastore.NewFirestoreDB()
-)
+type leagueController struct {
+	router.Router
+	datastore.Database
+}
 
 //LeagueController will create an interface to control all the League Operations
 type LeagueController interface {
@@ -25,16 +24,18 @@ type LeagueController interface {
 	Addleague(writer http.ResponseWriter, request *http.Request)
 	GetLeague(writer http.ResponseWriter, request *http.Request)
 	DeleteLeague(writer http.ResponseWriter, request *http.Request)
+	Updateleague(writer http.ResponseWriter, request *http.Request)
 }
 
 //NewLeagueController returns a League Controller to handle the League Operations
-func NewLeagueController() LeagueController {
-	return &controller{}
+func NewLeagueController(db datastore.Database, router router.Router) LeagueController {
+	return &leagueController{router, db}
 }
 
-func (*controller) GetAllLeagues(writer http.ResponseWriter, request *http.Request) {
+//GetAllLeagues returns all the items in the "leagues" table
+func (lc *leagueController) GetAllLeagues(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Type", "application/json")
-	leagues, err := db.GetAll("leagues")
+	leagues, err := lc.GetAll("leagues")
 
 	if err != nil {
 		writer.WriteHeader(http.StatusInternalServerError)
@@ -45,6 +46,7 @@ func (*controller) GetAllLeagues(writer http.ResponseWriter, request *http.Reque
 	json.NewEncoder(writer).Encode(leagues)
 }
 
+//validateLeague will validate that if item passed along it's valid or not
 func validateLeague(league map[string]interface{}) error {
 
 	if league == nil {
@@ -67,24 +69,28 @@ func validateLeague(league map[string]interface{}) error {
 
 }
 
-func (*controller) Addleague(writer http.ResponseWriter, request *http.Request) {
+func (lc *leagueController) Addleague(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Type", "application/json")
-	tmpLeague := make(map[string]interface{})
 
+	//Save the json body of the request in a map and handle the errors if any.
+	tmpLeague := make(map[string]interface{})
 	err := json.NewDecoder(request.Body).Decode(&tmpLeague)
 
 	if err != nil {
 		writer.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(writer).Encode(errorsHandler.ServiceError{Message: "Error adding the league"})
-		log.Println("Failed decoding item: ", err)
+		json.NewEncoder(writer).Encode(errorsHandler.ServiceError{Message: "Your JSON seems to be invalid. Please check again your input."})
+		//log.Println("Failed decoding item: ", err)
 		return
 	}
+
+	//Store the user input into a defined interface, this to remove any extra stuff the user might send
 	league := map[string]interface{}{
 		"name":              tmpLeague["name"],
 		"country":           tmpLeague["country"],
 		"current_season_id": tmpLeague["current_season_id"],
 	}
 
+	//Validate that the user input has the correct fields and types, otherwise handle the error and return a response to the user
 	err1 := validateLeague(league)
 	if err1 != nil {
 		writer.WriteHeader(http.StatusInternalServerError)
@@ -92,7 +98,8 @@ func (*controller) Addleague(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-	result, err2 := db.AddItem("leagues", league)
+	//Add the item to the database and handle the errors if any
+	result, err2 := lc.AddItem("leagues", league)
 
 	if err2 != nil {
 		writer.WriteHeader(http.StatusInternalServerError)
@@ -100,33 +107,83 @@ func (*controller) Addleague(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 
+	//Return the added object and a OK response
 	writer.WriteHeader(http.StatusOK)
-
 	json.NewEncoder(writer).Encode(result)
 }
 
-func (*controller) GetLeague(writer http.ResponseWriter, request *http.Request) {
+//GetLeague will return the requested league
+func (lc *leagueController) GetLeague(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Type", "application/json")
-	id := httpRouter.GetIDFromRequest(request)
-	league, err := db.GetItemByID("leagues", id)
+
+	//Get the id from the request url
+	vars := lc.GetVarsFromRequest(request)
+	id := vars["id"]
+
+	//Get the item from the DB and handle errors if any.
+	league, err := lc.GetItemByID("leagues", id)
 	if err != nil {
 		writer.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(writer).Encode(errorsHandler.ServiceError{Message: "League not found"})
 		return
 	}
+
+	//Return the item to the user
 	writer.WriteHeader(http.StatusOK)
 	json.NewEncoder(writer).Encode(league)
 }
 
-func (*controller) DeleteLeague(writer http.ResponseWriter, request *http.Request) {
+//DeleteLeague will delete the specified item
+func (lc *leagueController) DeleteLeague(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Type", "application/json")
-	id := httpRouter.GetIDFromRequest(request)
-	err := db.DeleteItem("leagues", id)
+
+	//Get the id from the request url
+	vars := lc.GetVarsFromRequest(request)
+	id := vars["id"]
+
+	//Perform the delete request and handle the error if any
+	err := lc.DeleteItem("leagues", id)
 	if err != nil {
 		writer.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(writer).Encode(errorsHandler.ServiceError{Message: "Error getting the leagues"})
+		json.NewEncoder(writer).Encode(errorsHandler.ServiceError{Message: err.Error()})
+		fmt.Println("Error")
 		return
 	}
+
+	//Return a success message.
 	writer.WriteHeader(http.StatusOK)
 	json.NewEncoder(writer).Encode(errorsHandler.ServiceError{Message: "Succesfully deleted league"})
+}
+
+func (lc *leagueController) Updateleague(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Content-Type", "application/json")
+
+	//Get the id from the request url
+	vars := lc.GetVarsFromRequest(request)
+	id := vars["id"]
+
+	//Save the json body of the request in a map and handle the errors if any.
+	tmpLeague := make(map[string]interface{})
+	err := json.NewDecoder(request.Body).Decode(&tmpLeague)
+
+	if err != nil {
+		writer.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(writer).Encode(errorsHandler.ServiceError{Message: "Your JSON seems to be invalid. Please check again your input."})
+		//log.Println("Failed decoding item: ", err)
+		return
+	}
+
+	//Update the league, handle errors if any and get the new updated item
+	var result map[string]interface{}
+	result, err = lc.UpdateItem("leagues", id, tmpLeague)
+	if err != nil {
+		writer.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(writer).Encode(errorsHandler.ServiceError{Message: err.Error()})
+		fmt.Println("Error")
+		return
+	}
+
+	//Return the added object and a OK response
+	writer.WriteHeader(http.StatusOK)
+	json.NewEncoder(writer).Encode(result)
 }

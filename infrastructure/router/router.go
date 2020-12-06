@@ -8,7 +8,8 @@ import (
 type Router interface {
 	GET(uri string, f func(writer http.ResponseWriter, request *http.Request))
 	POST(uri string, f func(writer http.ResponseWriter, request *http.Request))
+	PATCH(uri string, f func(writer http.ResponseWriter, request *http.Request))
 	DELETE(uri string, f func(writer http.ResponseWriter, request *http.Request))
 	SERVE(port string)
-	GetIDFromRequest(request *http.Request) string
+	GetVarsFromRequest(request *http.Request) map[string]string
 }
